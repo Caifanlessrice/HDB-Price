@@ -1,18 +1,29 @@
 // ── Core data types ────────────────────────────────────────
 
 export interface RawRecord {
-  month: string;
-  town: string;
-  flat_type: string;
-  block: string;
-  street_name: string;
-  storey_range: string;
-  floor_area_sqm: string;
-  lease_commence_date: string;
-  resale_price: string;
+  // Full keys (from API)
+  month?: string;
+  town?: string;
+  flat_type?: string;
+  block?: string;
+  street_name?: string;
+  storey_range?: string;
+  floor_area_sqm?: string;
+  lease_commence_date?: string;
+  resale_price?: string;
   remaining_lease?: string;
   flat_model?: string;
-  _id: number;
+  _id?: number;
+  // Short keys (from snapshot)
+  m?: string;
+  t?: string;
+  f?: string;
+  b?: string;
+  s?: string;
+  sr?: string;
+  a?: string;
+  l?: string;
+  p?: string;
 }
 
 export interface HDBRecord {

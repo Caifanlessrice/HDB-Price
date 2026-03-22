@@ -6,25 +6,36 @@ import { getCachedData, setCachedData } from "../utils/cache";
 const DATASET_ID = "d_8b84c4ee58e3cfc0ece0d773c8ca6abc";
 const PAGE_SIZE = 10_000;
 const CURRENT_YEAR = new Date().getFullYear();
-const MAX_PAGE_RETRIES = 10; // retries per single page request
-const RATE_WAIT = 5_000; // base wait on 429
-const BATCH_GAP = 2_500; // gap between sequential page fetches
+const MAX_PAGE_RETRIES = 10;
+const RATE_WAIT = 5_000;
+const BATCH_GAP = 2_500;
+
+// Pre-built snapshot shipped with the app (updated at build time)
+const SNAPSHOT_URL = `${import.meta.env.BASE_URL}hdb-snapshot.json`;
 
 function normalise(r: RawRecord): HDBRecord {
-  const floorAreaSqm = parseFloat(r.floor_area_sqm) || 0;
-  const resalePrice = parseFloat(r.resale_price) || 0;
-  const leaseStart = parseInt(r.lease_commence_date) || 0;
+  // Support both full keys (API) and short keys (snapshot)
+  const month = r.month ?? r.m ?? "";
+  const town = r.town ?? r.t ?? "";
+  const flatType = r.flat_type ?? r.f ?? "";
+  const block = r.block ?? r.b ?? "";
+  const streetName = r.street_name ?? r.s ?? "";
+  const storeyRange = r.storey_range ?? r.sr ?? "";
+  const floorAreaSqm = parseFloat(r.floor_area_sqm ?? r.a ?? "0") || 0;
+  const resalePrice = parseFloat(r.resale_price ?? r.p ?? "0") || 0;
+  const leaseCommenceDate = r.lease_commence_date ?? r.l ?? "";
+  const leaseStart = parseInt(leaseCommenceDate) || 0;
 
   return {
-    month: r.month,
-    year: r.month?.substring(0, 4) ?? "",
-    town: titleCase(r.town),
-    flatType: r.flat_type,
-    block: r.block,
-    streetName: titleCase(r.street_name),
-    storeyRange: r.storey_range,
+    month,
+    year: month.substring(0, 4),
+    town: titleCase(town),
+    flatType,
+    block,
+    streetName: titleCase(streetName),
+    storeyRange,
     floorAreaSqm,
-    leaseCommenceDate: r.lease_commence_date,
+    leaseCommenceDate,
     resalePrice,
     pricePerSqm: floorAreaSqm > 0 ? resalePrice / floorAreaSqm : 0,
     remainingLease: leaseStart > 0 ? 99 - (CURRENT_YEAR - leaseStart) : null,
@@ -35,10 +46,6 @@ function delay(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-/**
- * Fetch a single page with aggressive retry + backoff.
- * Will keep trying for up to ~90 seconds before giving up.
- */
 async function fetchPage(
   offset: number
 ): Promise<{ records: RawRecord[]; total: number }> {
@@ -48,7 +55,7 @@ async function fetchPage(
       const res = await fetch(url);
 
       if (res.status === 429) {
-        await delay(RATE_WAIT + attempt * 1500); // 5s, 6.5s, 8s, 9.5s…
+        await delay(RATE_WAIT + attempt * 1500);
         continue;
       }
 
@@ -56,7 +63,6 @@ async function fetchPage(
 
       const json = await res.json();
 
-      // Rate limit returned as 200 with error body
       if (json.code === 24 || json.name === "TOO_MANY_REQUESTS") {
         await delay(RATE_WAIT + attempt * 1500);
         continue;
@@ -67,7 +73,6 @@ async function fetchPage(
         total: json.result?.total ?? 0,
       };
     } catch (err) {
-      // Network error — retry after delay
       if (attempt < MAX_PAGE_RETRIES - 1) {
         await delay(RATE_WAIT);
         continue;
@@ -79,11 +84,26 @@ async function fetchPage(
   throw new Error("Rate limited after multiple retries");
 }
 
+/**
+ * Load pre-built snapshot from the app bundle.
+ * This is a static JSON file shipped with the build — no API calls needed.
+ */
+async function loadSnapshot(): Promise<RawRecord[] | null> {
+  try {
+    const res = await fetch(SNAPSHOT_URL);
+    if (!res.ok) return null;
+    const data: RawRecord[] = await res.json();
+    return Array.isArray(data) && data.length > 0 ? data : null;
+  } catch {
+    return null;
+  }
+}
+
 export function useHDBData() {
   const [data, setData] = useState<HDBRecord[]>([]);
   const [loading, setLoading] = useState(true);
   const [loadingMore, setLoadingMore] = useState(false);
-  const [progress, setProgress] = useState("Connecting to data.gov.sg…");
+  const [progress, setProgress] = useState("Loading…");
   const [total, setTotal] = useState(0);
   const [error, setError] = useState<string | null>(null);
   const hasFetched = useRef(false);
@@ -103,10 +123,6 @@ export function useHDBData() {
     if (hasFetched.current) return;
     hasFetched.current = true;
 
-    /**
-     * Sequential fetch with per-page retry.
-     * Reliable over aggressive — each page retries independently.
-     */
     async function fetchAllSequential(
       startOffset: number,
       totalRecords: number,
@@ -124,20 +140,11 @@ export function useHDBData() {
           const normalised = page.records.map(normalise);
           allRecords.push(...normalised);
           loadedCount += normalised.length;
-
           onProgress(normalised, totalRecords, loadedCount);
-
           currentOffset += PAGE_SIZE;
-
-          // Stop if we got fewer records than requested (last page)
           if (page.records.length < PAGE_SIZE) break;
-
-          // Pause between requests to stay under rate limit
-          if (currentOffset < totalRecords) {
-            await delay(BATCH_GAP);
-          }
+          if (currentOffset < totalRecords) await delay(BATCH_GAP);
         } catch {
-          // fetchPage already retried 10 times — give up on remaining
           break;
         }
       }
@@ -146,7 +153,9 @@ export function useHDBData() {
     }
 
     async function fetchAll() {
-      // ── Step 1: Try IndexedDB cache (instant load) ──
+      // ═══════════════════════════════════════════════════════
+      // Priority 1: IndexedDB cache (instant, <100ms)
+      // ═══════════════════════════════════════════════════════
       setProgress("Checking local cache…");
       try {
         const cached = await getCachedData();
@@ -155,26 +164,65 @@ export function useHDBData() {
           setTotal(cached.length);
           setProgress(`Loaded ${cached.length.toLocaleString()} records from cache`);
           setLoading(false);
-
-          // Background refresh to check for new data
           refreshInBackground(cached.length);
           return;
         }
       } catch {
-        // Cache unavailable, proceed with fetch
+        // Cache unavailable
       }
 
-      // ── Step 2: Fresh fetch — sequential with per-page retry ──
+      // ═══════════════════════════════════════════════════════
+      // Priority 2: Pre-built snapshot (fast, ~2-3s download)
+      // Ships with the app — no API rate limits
+      // ═══════════════════════════════════════════════════════
+      setProgress("Loading snapshot…");
+      try {
+        const snapshot = await loadSnapshot();
+        if (snapshot && snapshot.length > 0) {
+          // Normalise in chunks to keep UI responsive
+          const chunkSize = 50_000;
+          const allRecords: HDBRecord[] = [];
+
+          for (let i = 0; i < snapshot.length; i += chunkSize) {
+            const chunk = snapshot.slice(i, i + chunkSize).map(normalise);
+            allRecords.push(...chunk);
+
+            // Yield to UI thread between chunks
+            if (i + chunkSize < snapshot.length) {
+              setProgress(
+                `Processing ${Math.min(i + chunkSize, snapshot.length).toLocaleString()} of ${snapshot.length.toLocaleString()} records…`
+              );
+              await delay(0);
+            }
+          }
+
+          setData(allRecords);
+          setTotal(allRecords.length);
+          setProgress(`Loaded ${allRecords.length.toLocaleString()} records`);
+          setLoading(false);
+
+          // Cache the snapshot data for even faster next load
+          setCachedData(allRecords);
+
+          // Check for newer data in background
+          refreshInBackground(allRecords.length);
+          return;
+        }
+      } catch {
+        // Snapshot unavailable, fall back to API
+      }
+
+      // ═══════════════════════════════════════════════════════
+      // Priority 3: Live API fetch (slowest, rate-limited)
+      // ═══════════════════════════════════════════════════════
       setProgress("Connecting to data.gov.sg…");
 
-      // First page — discover total
       let totalRecords: number;
       let firstRecords: HDBRecord[];
       try {
         const firstPage = await fetchPage(0);
         totalRecords = firstPage.total;
         firstRecords = firstPage.records.map(normalise);
-
         appendData(firstRecords, totalRecords, firstRecords.length);
         setLoading(false);
         setLoadingMore(true);
@@ -184,7 +232,6 @@ export function useHDBData() {
         return;
       }
 
-      // Fetch remaining pages
       const allRecords = await fetchAllSequential(
         PAGE_SIZE,
         totalRecords,
@@ -195,23 +242,18 @@ export function useHDBData() {
 
       setLoadingMore(false);
 
-      // Cache for instant next visit
       if (allRecords.length > 0) {
         setCachedData(allRecords);
       }
     }
 
-    /**
-     * Background refresh: check for new data and silently update cache.
-     */
-    async function refreshInBackground(cachedCount: number) {
+    async function refreshInBackground(currentCount: number) {
       try {
-        await delay(3000); // Don't compete with initial render
+        await delay(5000); // Don't compete with initial render
         const probe = await fetchPage(0);
 
-        if (probe.total === cachedCount) return; // No new data
+        if (probe.total <= currentCount) return; // No new data
 
-        // New data available — re-fetch everything
         setLoadingMore(true);
 
         const firstRecords = probe.records.map(normalise);
@@ -226,7 +268,7 @@ export function useHDBData() {
           }
         );
 
-        if (allRecords.length > cachedCount) {
+        if (allRecords.length > currentCount) {
           setData(allRecords);
           setTotal(allRecords.length);
           setProgress(`${allRecords.length.toLocaleString()} records (updated)`);
@@ -235,7 +277,8 @@ export function useHDBData() {
 
         setLoadingMore(false);
       } catch {
-        // Background refresh failed — cached data is fine
+        // Background refresh failed — existing data is fine
+        setLoadingMore(false);
       }
     }
 
