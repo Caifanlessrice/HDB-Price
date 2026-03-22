@@ -1,13 +1,14 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import type { RawRecord, HDBRecord } from "../types";
 import { titleCase } from "../utils/format";
+import { getCachedData, setCachedData } from "../utils/cache";
 
 const DATASET_ID = "d_8b84c4ee58e3cfc0ece0d773c8ca6abc";
 const PAGE_SIZE = 10_000;
 const CURRENT_YEAR = new Date().getFullYear();
-const RATE_LIMIT_DELAY = 2_000; // ms between requests
-const RETRY_DELAY = 10_000; // ms to wait after hitting rate limit
-const MAX_RETRIES = 8;
+const MAX_PAGE_RETRIES = 10; // retries per single page request
+const RATE_WAIT = 5_000; // base wait on 429
+const BATCH_GAP = 2_500; // gap between sequential page fetches
 
 function normalise(r: RawRecord): HDBRecord {
   const floorAreaSqm = parseFloat(r.floor_area_sqm) || 0;
@@ -34,33 +35,45 @@ function delay(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+/**
+ * Fetch a single page with aggressive retry + backoff.
+ * Will keep trying for up to ~90 seconds before giving up.
+ */
 async function fetchPage(
   offset: number
 ): Promise<{ records: RawRecord[]; total: number }> {
-  for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
-    // Sort by month descending so we load the most recent data first
-    const url = `https://data.gov.sg/api/action/datastore_search?resource_id=${DATASET_ID}&limit=${PAGE_SIZE}&offset=${offset}&sort=month%20desc`;
-    const res = await fetch(url);
+  for (let attempt = 0; attempt < MAX_PAGE_RETRIES; attempt++) {
+    try {
+      const url = `https://data.gov.sg/api/action/datastore_search?resource_id=${DATASET_ID}&limit=${PAGE_SIZE}&offset=${offset}&sort=month%20desc`;
+      const res = await fetch(url);
 
-    if (res.status === 429) {
-      await delay(RETRY_DELAY);
-      continue;
+      if (res.status === 429) {
+        await delay(RATE_WAIT + attempt * 1500); // 5s, 6.5s, 8s, 9.5s…
+        continue;
+      }
+
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+
+      const json = await res.json();
+
+      // Rate limit returned as 200 with error body
+      if (json.code === 24 || json.name === "TOO_MANY_REQUESTS") {
+        await delay(RATE_WAIT + attempt * 1500);
+        continue;
+      }
+
+      return {
+        records: json.result?.records ?? [],
+        total: json.result?.total ?? 0,
+      };
+    } catch (err) {
+      // Network error — retry after delay
+      if (attempt < MAX_PAGE_RETRIES - 1) {
+        await delay(RATE_WAIT);
+        continue;
+      }
+      throw err;
     }
-
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-
-    const json = await res.json();
-
-    // Rate limit returned as 200 with error body
-    if (json.code === 24 || json.name === "TOO_MANY_REQUESTS") {
-      await delay(RETRY_DELAY);
-      continue;
-    }
-
-    return {
-      records: json.result?.records ?? [],
-      total: json.result?.total ?? 0,
-    };
   }
 
   throw new Error("Rate limited after multiple retries");
@@ -75,7 +88,6 @@ export function useHDBData() {
   const [error, setError] = useState<string | null>(null);
   const hasFetched = useRef(false);
 
-  // Progressive data update — batches state updates
   const appendData = useCallback(
     (newRecords: HDBRecord[], totalCount: number, loadedCount: number) => {
       setData((prev) => [...prev, ...newRecords]);
@@ -91,63 +103,140 @@ export function useHDBData() {
     if (hasFetched.current) return;
     hasFetched.current = true;
 
-    async function fetchAll() {
-      let offset = 0;
-      let loadedCount = 0;
-      let isFirstBatch = true;
-      let totalRecords = 0;
-      let consecutiveErrors = 0;
+    /**
+     * Sequential fetch with per-page retry.
+     * Reliable over aggressive — each page retries independently.
+     */
+    async function fetchAllSequential(
+      startOffset: number,
+      totalRecords: number,
+      existingRecords: HDBRecord[],
+      existingCount: number,
+      onProgress: (records: HDBRecord[], total: number, loaded: number) => void
+    ): Promise<HDBRecord[]> {
+      const allRecords = [...existingRecords];
+      let loadedCount = existingCount;
+      let currentOffset = startOffset;
 
-      // eslint-disable-next-line no-constant-condition
-      while (true) {
+      while (currentOffset < totalRecords) {
         try {
-          const page = await fetchPage(offset);
-          consecutiveErrors = 0; // reset on success
-          totalRecords = page.total;
-
+          const page = await fetchPage(currentOffset);
           const normalised = page.records.map(normalise);
+          allRecords.push(...normalised);
           loadedCount += normalised.length;
-          offset += PAGE_SIZE;
 
-          appendData(normalised, page.total, loadedCount);
+          onProgress(normalised, totalRecords, loadedCount);
 
-          // After first batch, switch from full loading screen to background loading
-          if (isFirstBatch) {
-            setLoading(false);
-            setLoadingMore(true);
-            isFirstBatch = false;
+          currentOffset += PAGE_SIZE;
+
+          // Stop if we got fewer records than requested (last page)
+          if (page.records.length < PAGE_SIZE) break;
+
+          // Pause between requests to stay under rate limit
+          if (currentOffset < totalRecords) {
+            await delay(BATCH_GAP);
           }
-
-          // Stop when we've received fewer records than requested (last page)
-          // OR when we've loaded all records based on the total count
-          if (page.records.length < PAGE_SIZE || loadedCount >= totalRecords) {
-            break;
-          }
-
-          // Rate-limit-safe delay between requests
-          await delay(RATE_LIMIT_DELAY);
-        } catch (err) {
-          consecutiveErrors++;
-
-          if (isFirstBatch) {
-            setError(
-              err instanceof Error ? err.message : "Failed to fetch data"
-            );
-            setLoading(false);
-            break;
-          }
-
-          // Retry up to 3 consecutive errors before giving up
-          if (consecutiveErrors >= 3) {
-            break;
-          }
-
-          // Wait longer before retrying after an error
-          await delay(RETRY_DELAY);
+        } catch {
+          // fetchPage already retried 10 times — give up on remaining
+          break;
         }
       }
 
+      return allRecords;
+    }
+
+    async function fetchAll() {
+      // ── Step 1: Try IndexedDB cache (instant load) ──
+      setProgress("Checking local cache…");
+      try {
+        const cached = await getCachedData();
+        if (cached && cached.length > 0) {
+          setData(cached);
+          setTotal(cached.length);
+          setProgress(`Loaded ${cached.length.toLocaleString()} records from cache`);
+          setLoading(false);
+
+          // Background refresh to check for new data
+          refreshInBackground(cached.length);
+          return;
+        }
+      } catch {
+        // Cache unavailable, proceed with fetch
+      }
+
+      // ── Step 2: Fresh fetch — sequential with per-page retry ──
+      setProgress("Connecting to data.gov.sg…");
+
+      // First page — discover total
+      let totalRecords: number;
+      let firstRecords: HDBRecord[];
+      try {
+        const firstPage = await fetchPage(0);
+        totalRecords = firstPage.total;
+        firstRecords = firstPage.records.map(normalise);
+
+        appendData(firstRecords, totalRecords, firstRecords.length);
+        setLoading(false);
+        setLoadingMore(true);
+      } catch (err) {
+        setError(err instanceof Error ? err.message : "Failed to fetch data");
+        setLoading(false);
+        return;
+      }
+
+      // Fetch remaining pages
+      const allRecords = await fetchAllSequential(
+        PAGE_SIZE,
+        totalRecords,
+        firstRecords,
+        firstRecords.length,
+        (newRecords, total, loaded) => appendData(newRecords, total, loaded)
+      );
+
       setLoadingMore(false);
+
+      // Cache for instant next visit
+      if (allRecords.length > 0) {
+        setCachedData(allRecords);
+      }
+    }
+
+    /**
+     * Background refresh: check for new data and silently update cache.
+     */
+    async function refreshInBackground(cachedCount: number) {
+      try {
+        await delay(3000); // Don't compete with initial render
+        const probe = await fetchPage(0);
+
+        if (probe.total === cachedCount) return; // No new data
+
+        // New data available — re-fetch everything
+        setLoadingMore(true);
+
+        const firstRecords = probe.records.map(normalise);
+
+        const allRecords = await fetchAllSequential(
+          PAGE_SIZE,
+          probe.total,
+          firstRecords,
+          firstRecords.length,
+          (_newRecords, total, loaded) => {
+            setProgress(`Updating ${loaded.toLocaleString()} of ${total.toLocaleString()}`);
+          }
+        );
+
+        if (allRecords.length > cachedCount) {
+          setData(allRecords);
+          setTotal(allRecords.length);
+          setProgress(`${allRecords.length.toLocaleString()} records (updated)`);
+          setCachedData(allRecords);
+        }
+
+        setLoadingMore(false);
+      } catch {
+        // Background refresh failed — cached data is fine
+      }
     }
 
     fetchAll();
