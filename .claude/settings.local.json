@@ -1,0 +1,16 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(npx tsc:*)",
+      "Bash(node_modules/.bin/tsc --noEmit)",
+      "Bash(where node:*)",
+      "Bash(echo \"PATH: $PATH\")",
+      "Read(//c/Program Files/nodejs//**)",
+      "Read(//c/Users/kianm/AppData/Roaming/**)",
+      "Read(//c/Users/kianm/**)",
+      "Bash(export PATH=\"/c/Program Files/nodejs:$PATH\")",
+      "Bash(npm run:*)",
+      "mcp__Claude_Preview__preview_start"
+    ]
+  }
+}
