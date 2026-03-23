@@ -10,8 +10,8 @@ const MAX_PAGE_RETRIES = 10;
 const RATE_WAIT = 5_000;
 const BATCH_GAP = 2_500;
 
-// Pre-built snapshot shipped with the app (updated at build time)
-const SNAPSHOT_URL = `${import.meta.env.BASE_URL}hdb-snapshot.json`;
+// Pre-built snapshot shipped with the app (CSV format for smaller size)
+const SNAPSHOT_URL = `${import.meta.env.BASE_URL}hdb-snapshot.csv`;
 
 function normalise(r: RawRecord): HDBRecord {
   // Support both full keys (API) and short keys (snapshot)
@@ -85,15 +85,56 @@ async function fetchPage(
 }
 
 /**
+ * Parse CSV text into RawRecord array.
+ * Handles quoted fields (e.g. street names with commas).
+ */
+function parseCSV(text: string): RawRecord[] {
+  const lines = text.trim().split("\n");
+  if (lines.length < 2) return [];
+
+  const headers = lines[0].split(",") as (keyof RawRecord)[];
+  const records: RawRecord[] = [];
+
+  for (let i = 1; i < lines.length; i++) {
+    const line = lines[i];
+    const values: string[] = [];
+    let current = "";
+    let inQuotes = false;
+
+    for (let j = 0; j < line.length; j++) {
+      const ch = line[j];
+      if (ch === '"') {
+        inQuotes = !inQuotes;
+      } else if (ch === "," && !inQuotes) {
+        values.push(current);
+        current = "";
+      } else {
+        current += ch;
+      }
+    }
+    values.push(current);
+
+    const record: RawRecord = {};
+    for (let k = 0; k < headers.length; k++) {
+      (record as Record<string, string>)[headers[k]] = values[k] ?? "";
+    }
+    records.push(record);
+  }
+
+  return records;
+}
+
+/**
  * Load pre-built snapshot from the app bundle.
- * This is a static JSON file shipped with the build — no API calls needed.
+ * CSV format for smaller file size (~15 MiB vs ~28 MiB JSON).
  */
 async function loadSnapshot(): Promise<RawRecord[] | null> {
   try {
     const res = await fetch(SNAPSHOT_URL);
     if (!res.ok) return null;
-    const data: RawRecord[] = await res.json();
-    return Array.isArray(data) && data.length > 0 ? data : null;
+    const text = await res.text();
+    const data = parseCSV(text);
+    return data.length > 0 ? data : null;
   } catch {
     return null;
   }
