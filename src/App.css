@@ -2,6 +2,19 @@
    HDB Resale Explorer — Component Styles (Mobile-first)
    ====================================================== */
 
+/* === Reset focus outlines on chart elements === */
+.recharts-surface,
+.recharts-surface *,
+.recharts-wrapper,
+.recharts-wrapper *,
+svg:focus,
+svg *:focus,
+.card:focus,
+.card *:focus {
+  outline: none !important;
+  box-shadow: none !important;
+}
+
 /* === App Shell === */
 .app {
   max-width: 1200px;
