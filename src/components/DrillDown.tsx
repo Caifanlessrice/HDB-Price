@@ -4,17 +4,15 @@ import { formatPrice, formatPriceShort } from "../utils/format";
 import { median } from "../utils/aggregate";
 
 interface DrillDownProps {
-  town: string;
+  title: string;
   data: HDBRecord[];
   onClose: () => void;
 }
 
-export function DrillDown({ town, data, onClose }: DrillDownProps) {
-  const townData = data
-    .filter((r) => r.town === town)
-    .sort((a, b) => b.resalePrice - a.resalePrice);
+export function DrillDown({ title, data, onClose }: DrillDownProps) {
+  const sorted = [...data].sort((a, b) => b.resalePrice - a.resalePrice);
 
-  const prices = townData.map((r) => r.resalePrice);
+  const prices = sorted.map((r) => r.resalePrice);
   const avg = prices.length
     ? prices.reduce((a, b) => a + b, 0) / prices.length
     : 0;
@@ -22,14 +20,14 @@ export function DrillDown({ town, data, onClose }: DrillDownProps) {
   const highest = prices[0] ?? 0;
   const lowest = prices[prices.length - 1] ?? 0;
 
-  const display = townData.slice(0, 300);
+  const display = sorted.slice(0, 300);
 
   return (
     <div className="drill-panel">
       <div className="card card-full">
         <div className="card-header">
           <h3>
-            <Search size={16} /> {town} — {townData.length.toLocaleString()}{" "}
+            <Search size={16} /> {title} — {data.length.toLocaleString()}{" "}
             Transactions
           </h3>
           <button className="btn-close" onClick={onClose}>
@@ -67,6 +65,7 @@ export function DrillDown({ town, data, onClose }: DrillDownProps) {
             <thead>
               <tr>
                 <th>Month</th>
+                <th>Town</th>
                 <th>Block & Street</th>
                 <th>Flat Type</th>
                 <th>Storey</th>
@@ -80,6 +79,7 @@ export function DrillDown({ town, data, onClose }: DrillDownProps) {
               {display.map((r, i) => (
                 <tr key={i}>
                   <td>{r.month}</td>
+                  <td>{r.town}</td>
                   <td>
                     {r.block} {r.streetName}
                   </td>
@@ -94,9 +94,9 @@ export function DrillDown({ town, data, onClose }: DrillDownProps) {
             </tbody>
           </table>
         </div>
-        {townData.length > 300 && (
+        {data.length > 300 && (
           <p className="table-footer">
-            Showing top 300 of {townData.length.toLocaleString()} transactions
+            Showing top 300 of {data.length.toLocaleString()} transactions
           </p>
         )}
       </div>

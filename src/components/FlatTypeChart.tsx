@@ -27,9 +27,10 @@ const FLAT_ORDER = [
 
 interface FlatTypeChartProps {
   data: HDBRecord[];
+  onFlatTypeClick: (flatType: string) => void;
 }
 
-export function FlatTypeChart({ data }: FlatTypeChartProps) {
+export function FlatTypeChart({ data, onFlatTypeClick }: FlatTypeChartProps) {
   const agg = aggregateBy(data, "flatType");
   const sorted = FLAT_ORDER.filter((t) =>
     agg.some((a) => a.label === t)
@@ -39,6 +40,7 @@ export function FlatTypeChart({ data }: FlatTypeChartProps) {
     <ChartCard
       title="Price by Flat Type"
       icon={<Layers size={16} />}
+      badge="Tap to drill down"
     >
       <ResponsiveContainer width="100%" height={280}>
         <BarChart data={sorted} margin={{ bottom: 20 }}>
@@ -64,7 +66,13 @@ export function FlatTypeChart({ data }: FlatTypeChartProps) {
             labelStyle={{ color: "#ffffff" }}
             itemStyle={{ color: "#ffffff" }}
           />
-          <Bar dataKey="avg" radius={[4, 4, 0, 0]} maxBarSize={50}>
+          <Bar
+            dataKey="avg"
+            radius={[4, 4, 0, 0]}
+            maxBarSize={50}
+            cursor="pointer"
+            onClick={(entry) => onFlatTypeClick((entry as unknown as { label: string }).label)}
+          >
             {sorted.map((_, i) => (
               <Cell key={i} fill={COLORS[(i + 4) % COLORS.length]} />
             ))}

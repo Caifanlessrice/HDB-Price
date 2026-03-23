@@ -15,9 +15,10 @@ import { ChartCard } from "./ChartCard";
 
 interface TrendChartProps {
   data: HDBRecord[];
+  onMonthClick: (month: string) => void;
 }
 
-export function TrendChart({ data }: TrendChartProps) {
+export function TrendChart({ data, onMonthClick }: TrendChartProps) {
   const trend = aggregateTrend(data);
 
   // Show every Nth label to avoid clutter
@@ -36,6 +37,7 @@ export function TrendChart({ data }: TrendChartProps) {
       title="Price Trend Over Time"
       icon={<TrendingUp size={16} />}
       className="card-wide"
+      badge="Tap point to drill down"
     >
       <ResponsiveContainer width="100%" height={280}>
         <AreaChart data={withLabels} margin={{ right: 10 }}>
@@ -76,6 +78,15 @@ export function TrendChart({ data }: TrendChartProps) {
             stroke="#6366f1"
             strokeWidth={2}
             fill="url(#trendGrad)"
+            cursor="pointer"
+            activeDot={{
+              r: 6,
+              // eslint-disable-next-line @typescript-eslint/no-explicit-any
+              onClick: (_e: any, data: any) => {
+                const month = data?.payload?.month;
+                if (month) onMonthClick(month);
+              },
+            }}
           >
             <LabelList
               dataKey="displayPrice"

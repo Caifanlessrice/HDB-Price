@@ -1,4 +1,4 @@
-import { useState, useMemo } from "react";
+import { useState, useMemo, useCallback, useRef } from "react";
 import type { Filters } from "./types";
 import { useHDBData } from "./hooks/useHDBData";
 import { LoadingScreen } from "./components/LoadingScreen";
@@ -14,6 +14,13 @@ import { HeatMap } from "./components/HeatMap";
 import { DrillDown } from "./components/DrillDown";
 import "./App.css";
 
+export interface DrillFilter {
+  town?: string;
+  flatType?: string;
+  storeyRange?: string;
+  month?: string;
+}
+
 function App() {
   const { data, loading, loadingMore, progress, total, error } = useHDBData();
   const [filters, setFilters] = useState<Filters>({
@@ -21,7 +28,8 @@ function App() {
     town: "all",
     flatType: "all",
   });
-  const [drillTown, setDrillTown] = useState<string | null>(null);
+  const [drillFilter, setDrillFilter] = useState<DrillFilter | null>(null);
+  const drillRef = useRef<HTMLDivElement>(null);
 
   const filtered = useMemo(() => {
     return data.filter(
@@ -31,6 +39,59 @@ function App() {
         (filters.flatType === "all" || r.flatType === filters.flatType)
     );
   }, [data, filters]);
+
+  // Apply drill-down filter on top of global filters
+  const drillData = useMemo(() => {
+    if (!drillFilter) return [];
+    return filtered.filter((r) =>
+      (!drillFilter.town || r.town === drillFilter.town) &&
+      (!drillFilter.flatType || r.flatType === drillFilter.flatType) &&
+      (!drillFilter.storeyRange || r.storeyRange === drillFilter.storeyRange) &&
+      (!drillFilter.month || r.month === drillFilter.month)
+    );
+  }, [filtered, drillFilter]);
+
+  const scrollToDrill = useCallback(() => {
+    setTimeout(() => {
+      drillRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+    }, 100);
+  }, []);
+
+  const handleDrill = useCallback((filter: DrillFilter) => {
+    setDrillFilter(filter);
+    scrollToDrill();
+  }, [scrollToDrill]);
+
+  const handleTownClick = useCallback((town: string) => {
+    handleDrill({ town });
+  }, [handleDrill]);
+
+  const handleFlatTypeClick = useCallback((flatType: string) => {
+    handleDrill({ flatType });
+  }, [handleDrill]);
+
+  const handleStoreyClick = useCallback((storeyRange: string) => {
+    handleDrill({ storeyRange });
+  }, [handleDrill]);
+
+  const handleMonthClick = useCallback((month: string) => {
+    handleDrill({ month });
+  }, [handleDrill]);
+
+  const handlePieClick = useCallback((flatType: string) => {
+    handleDrill({ flatType });
+  }, [handleDrill]);
+
+  // Build drill-down title
+  const drillTitle = useMemo(() => {
+    if (!drillFilter) return "";
+    const parts: string[] = [];
+    if (drillFilter.town) parts.push(drillFilter.town);
+    if (drillFilter.flatType) parts.push(drillFilter.flatType);
+    if (drillFilter.storeyRange) parts.push(`Floor ${drillFilter.storeyRange}`);
+    if (drillFilter.month) parts.push(drillFilter.month);
+    return parts.join(" · ");
+  }, [drillFilter]);
 
   if (loading) {
     return <LoadingScreen progress={progress} error={error} />;
@@ -77,30 +138,32 @@ function App() {
       {/* Charts */}
       <section className="dashboard">
         {/* Heat Map — full width, first visual */}
-        <HeatMap data={filtered} onTownClick={setDrillTown} />
+        <HeatMap data={filtered} onTownClick={handleTownClick} />
 
         <div className="chart-row">
-          <TownChart data={filtered} onTownClick={setDrillTown} />
-          <FlatTypeChart data={filtered} />
+          <TownChart data={filtered} onTownClick={handleTownClick} />
+          <FlatTypeChart data={filtered} onFlatTypeClick={handleFlatTypeClick} />
         </div>
 
         <div className="chart-row">
-          <TrendChart data={filtered} />
-          <TransactionPie data={filtered} />
+          <TrendChart data={filtered} onMonthClick={handleMonthClick} />
+          <TransactionPie data={filtered} onFlatTypeClick={handlePieClick} />
         </div>
 
-        <PsmChart data={filtered} />
-        <StoreyChart data={filtered} />
+        <PsmChart data={filtered} onTownClick={handleTownClick} />
+        <StoreyChart data={filtered} onStoreyClick={handleStoreyClick} />
       </section>
 
       {/* Drill-down */}
-      {drillTown && (
-        <DrillDown
-          town={drillTown}
-          data={filtered}
-          onClose={() => setDrillTown(null)}
-        />
-      )}
+      <div ref={drillRef}>
+        {drillFilter && (
+          <DrillDown
+            title={drillTitle}
+            data={drillData}
+            onClose={() => setDrillFilter(null)}
+          />
+        )}
+      </div>
 
       {/* Footer */}
       <footer className="footer">

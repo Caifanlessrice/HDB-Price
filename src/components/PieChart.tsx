@@ -14,9 +14,10 @@ import { COLORS } from "../utils/colors";
 
 interface TransactionPieProps {
   data: HDBRecord[];
+  onFlatTypeClick: (flatType: string) => void;
 }
 
-export function TransactionPie({ data }: TransactionPieProps) {
+export function TransactionPie({ data, onFlatTypeClick }: TransactionPieProps) {
   const counts = new Map<string, number>();
   for (const r of data) {
     counts.set(r.flatType, (counts.get(r.flatType) ?? 0) + 1);
@@ -41,7 +42,7 @@ export function TransactionPie({ data }: TransactionPieProps) {
   const labelFontSize = isMobile ? 9 : 11;
 
   return (
-    <ChartCard title="Transaction Mix" icon={<PieIcon size={16} />}>
+    <ChartCard title="Transaction Mix" icon={<PieIcon size={16} />} badge="Tap to drill down">
       <ResponsiveContainer width="100%" height={isMobile ? 260 : 280}>
         <RePieChart>
           <Pie
@@ -52,6 +53,8 @@ export function TransactionPie({ data }: TransactionPieProps) {
             outerRadius={outerR}
             dataKey="value"
             paddingAngle={2}
+            cursor="pointer"
+            onClick={(entry) => onFlatTypeClick(entry.name ?? "")}
             label={({ percent, x, y, textAnchor }: { percent?: number; x: number; y: number; textAnchor: string }) => (
               <text x={x} y={y} textAnchor={textAnchor as "start" | "middle" | "end"} fill="#ffffff" fontSize={labelFontSize} fontWeight={600}>
                 {((percent ?? 0) * 100).toFixed(1)}%

@@ -16,16 +16,17 @@ import { COLORS } from "../utils/colors";
 
 interface PsmChartProps {
   data: HDBRecord[];
+  onTownClick: (town: string) => void;
 }
 
-export function PsmChart({ data }: PsmChartProps) {
+export function PsmChart({ data, onTownClick }: PsmChartProps) {
   const agg = aggregateByPsm(data).sort((a, b) => b.avg - a.avg);
 
   return (
     <ChartCard
       title="Price per sqm by Town"
       icon={<Ruler size={16} />}
-      badge="Normalised comparison"
+      badge="Tap to drill down"
       className="card-full"
     >
       <div style={{ height: Math.max(400, agg.length * 28) }}>
@@ -57,7 +58,12 @@ export function PsmChart({ data }: PsmChartProps) {
               labelStyle={{ color: "#ffffff" }}
               itemStyle={{ color: "#ffffff" }}
             />
-            <Bar dataKey="avg" radius={[0, 4, 4, 0]}>
+            <Bar
+              dataKey="avg"
+              radius={[0, 4, 4, 0]}
+              cursor="pointer"
+              onClick={(entry) => onTownClick((entry as unknown as { label: string }).label)}
+            >
               {agg.map((_, i) => (
                 <Cell key={i} fill={COLORS[(i + 2) % COLORS.length]} />
               ))}

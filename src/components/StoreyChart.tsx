@@ -17,6 +17,7 @@ import { COLORS } from "../utils/colors";
 
 interface StoreyChartProps {
   data: HDBRecord[];
+  onStoreyClick: (storeyRange: string) => void;
 }
 
 // Sort storey ranges by their lower bound
@@ -25,7 +26,7 @@ function storeySort(a: string, b: string): number {
   return getMin(a) - getMin(b);
 }
 
-export function StoreyChart({ data }: StoreyChartProps) {
+export function StoreyChart({ data, onStoreyClick }: StoreyChartProps) {
   const agg = aggregateBy(data, "storeyRange").sort((a, b) =>
     storeySort(a.label, b.label)
   );
@@ -34,7 +35,7 @@ export function StoreyChart({ data }: StoreyChartProps) {
     <ChartCard
       title="Price by Storey Range"
       icon={<Building2 size={16} />}
-      badge="High-floor premium"
+      badge="Tap to drill down"
       className="card-full"
     >
       <div style={{ minWidth: Math.max(400, agg.length * 45) }}>
@@ -62,7 +63,13 @@ export function StoreyChart({ data }: StoreyChartProps) {
             labelStyle={{ color: "#ffffff" }}
             itemStyle={{ color: "#ffffff" }}
           />
-          <Bar dataKey="avg" radius={[4, 4, 0, 0]} maxBarSize={40}>
+          <Bar
+            dataKey="avg"
+            radius={[4, 4, 0, 0]}
+            maxBarSize={40}
+            cursor="pointer"
+            onClick={(entry) => onStoreyClick((entry as unknown as { label: string }).label)}
+          >
             {agg.map((_, i) => (
               <Cell key={i} fill={COLORS[(i + 8) % COLORS.length]} />
             ))}
